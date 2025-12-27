@@ -30,3 +30,15 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Node.js (for scripts)
+node_modules/
+
+# Bun
+bun.lockb
+
+# Log files
+*.log
+
+# CI artifacts
+ci-logs/
