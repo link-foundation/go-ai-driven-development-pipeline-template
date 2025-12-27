@@ -7,15 +7,26 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
-      bump_type:
-        description: 'Version bump type'
+      release_mode:
+        description: 'Release mode'
         required: true
-        default: 'patch'
+        type: choice
+        default: 'instant'
+        options:
+          - instant
+          - changeset
+      bump_type:
+        description: 'Version bump type (for instant mode)'
+        required: true
         type: choice
         options:
           - patch
           - minor
           - major
+      description:
+        description: 'Release description (optional)'
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,9 +37,34 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Changeset check - only runs on PRs
+  changeset-check:
+    name: Check for Changeset
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Check for changeset
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bun scripts/validate-changeset.mjs
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: [changeset-check]
+    if: always() && (github.event_name == 'push' || needs.changeset-check.result == 'success')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,7 +103,8 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: lint
+    needs: [changeset-check]
+    if: always() && (github.event_name == 'push' || needs.changeset-check.result == 'success')
     strategy:
       fail-fast: false
       matrix:
@@ -118,27 +155,7 @@ jobs:
       - name: Build example
         run: go build -o example ./examples/basic_usage.go
 
-  changelog:
-    name: Check Changelog
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Validate changelog fragment
-        run: bun scripts/validate-changeset.mjs
-        env:
-          GITHUB_BASE_REF: ${{ github.base_ref }}
-        continue-on-error: true
-
+  # Auto release - runs on main when PRs with changesets are merged
   auto-release:
     name: Auto Release
     runs-on: ubuntu-latest
@@ -149,46 +166,53 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Get current version
+      - name: Check for changesets
+        id: check_changesets
+        run: |
+          # Count changeset files (excluding README.md)
+          CHANGESET_COUNT=$(find .changeset -name "*.md" ! -name "README.md" 2>/dev/null | wc -l)
+          echo "Found $CHANGESET_COUNT changeset file(s)"
+          echo "has_changesets=$([[ $CHANGESET_COUNT -gt 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "changeset_count=$CHANGESET_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Merge multiple changesets
+        if: steps.check_changesets.outputs.has_changesets == 'true' && steps.check_changesets.outputs.changeset_count > 1
+        run: |
+          echo "Multiple changesets detected, merging..."
+          bun scripts/merge-changesets.mjs
+
+      - name: Configure git
+        if: steps.check_changesets.outputs.has_changesets == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Version and release
+        if: steps.check_changesets.outputs.has_changesets == 'true'
         id: version
-        run: |
-          VERSION=$(grep 'const Version = ' pkg/mypackage/mypackage.go | sed 's/.*"\(.*\)".*/\1/')
-          echo "current=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check if tag exists
-        id: tag_check
-        run: |
-          if git rev-parse "v${{ steps.version.outputs.current }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Collect changelog
-        if: steps.tag_check.outputs.exists == 'false'
-        run: bun scripts/collect-changelog.mjs --version ${{ steps.version.outputs.current }}
-        continue-on-error: true
+        run: bun scripts/version-and-commit.mjs --mode changeset
+        env:
+          CI: true
 
       - name: Create GitHub Release
-        if: steps.tag_check.outputs.exists == 'false'
-        run: |
-          git tag -a "v${{ steps.version.outputs.current }}" -m "Release v${{ steps.version.outputs.current }}"
-          git push origin "v${{ steps.version.outputs.current }}"
-          bun scripts/create-github-release.mjs --version ${{ steps.version.outputs.current }}
+        if: steps.check_changesets.outputs.has_changesets == 'true' && steps.version.outputs.version_committed == 'true'
+        run: bun scripts/create-github-release.mjs --version ${{ steps.version.outputs.new_version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  manual-release:
-    name: Manual Release
+  # Manual instant release
+  instant-release:
+    name: Instant Release
     runs-on: ubuntu-latest
     needs: [lint, test, build]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -206,15 +230,64 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump version and release
-        id: release
-        run: bun scripts/version-and-commit.mjs --bump-type ${{ inputs.bump_type }}
+      - name: Version and release
+        id: version
+        run: bun scripts/version-and-commit.mjs --mode instant --bump-type ${{ github.event.inputs.bump_type }} --description "${{ github.event.inputs.description }}"
+        env:
+          CI: true
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.version_committed == 'true'
+        run: bun scripts/create-github-release.mjs --version ${{ steps.version.outputs.new_version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create GitHub Release
+  # Manual changeset release - processes existing changesets
+  changeset-release:
+    name: Changeset Release
+    runs-on: ubuntu-latest
+    needs: [lint, test, build]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'changeset'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Check for changesets
+        id: check_changesets
         run: |
-          VERSION=$(grep 'const Version = ' pkg/mypackage/mypackage.go | sed 's/.*"\(.*\)".*/\1/')
-          bun scripts/create-github-release.mjs --version $VERSION
+          CHANGESET_COUNT=$(find .changeset -name "*.md" ! -name "README.md" 2>/dev/null | wc -l)
+          echo "Found $CHANGESET_COUNT changeset file(s)"
+          if [ "$CHANGESET_COUNT" -eq 0 ]; then
+            echo "No changesets found to release"
+            exit 1
+          fi
+          echo "changeset_count=$CHANGESET_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Merge multiple changesets
+        if: steps.check_changesets.outputs.changeset_count > 1
+        run: bun scripts/merge-changesets.mjs
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Version and release
+        id: version
+        run: bun scripts/version-and-commit.mjs --mode changeset
+        env:
+          CI: true
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.version_committed == 'true'
+        run: bun scripts/create-github-release.mjs --version ${{ steps.version.outputs.new_version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

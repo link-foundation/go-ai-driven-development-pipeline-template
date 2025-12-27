@@ -10,7 +10,7 @@ A production-ready template for Go projects with AI-assisted development, featur
 - **Code quality** - gofmt, go vet, staticcheck
 - **Pre-commit hooks** - Automatic formatting and linting
 - **CI/CD pipeline** - GitHub Actions with full automation
-- **Changelog management** - Fragment-based system (no merge conflicts)
+- **Changeset workflow** - Version management without merge conflicts
 - **Release automation** - Automatic and manual release modes
 - **File size limits** - Enforced 1000-line maximum per file
 
@@ -55,11 +55,12 @@ pre-commit install
 
 ```
 .
+├── .changeset/
+│   ├── config.json              # Changeset configuration
+│   └── README.md                # Changeset instructions
 ├── .github/
 │   └── workflows/
 │       └── release.yml          # CI/CD pipeline
-├── changelog.d/
-│   └── README.md                # Changelog fragment instructions
 ├── examples/
 │   └── basic_usage.go           # Usage examples
 ├── pkg/
@@ -67,10 +68,9 @@ pre-commit install
 │       ├── mypackage.go         # Main library code
 │       └── mypackage_test.go    # Tests
 ├── scripts/
-│   ├── bump-version.mjs         # Version bumping
 │   ├── check-file-size.mjs      # File size validation
-│   ├── collect-changelog.mjs    # Changelog aggregation
 │   ├── create-github-release.mjs # Release creation
+│   ├── merge-changesets.mjs     # Merge multiple changesets
 │   ├── validate-changeset.mjs   # PR validation
 │   └── version-and-commit.mjs   # Full release workflow
 ├── .gitignore
@@ -99,32 +99,45 @@ pre-commit install
 - **Cross-platform** - Tests run on Ubuntu, macOS, and Windows
 - **Coverage reporting** - Automatic upload to Codecov
 
-### Changelog Management
+### Changeset Workflow
 
-Uses a fragment-based system similar to [Changesets](https://github.com/changesets/changesets):
+Uses a changeset-based system similar to [Changesets](https://github.com/changesets/changesets) for JavaScript:
 
-1. Each PR adds a `.md` file to `changelog.d/`
-2. Fragments are collected during release
+1. Each PR adds a `.md` file to `.changeset/`
+2. Changeset specifies version bump type (patch/minor/major)
 3. No merge conflicts between concurrent PRs
-4. Automatic cleanup after collection
+4. Automatic version bumping after merge
+5. Safe, conflict-free version management
+
+Example changeset file (`.changeset/add-new-feature.md`):
+
+```markdown
+---
+'go-ai-driven-development-pipeline-template': minor
+---
+
+Added new feature for doing awesome things.
+```
 
 ### CI/CD Pipeline
 
 The pipeline includes:
 
-1. **Lint job** - Formatting, vetting, static analysis, file size checks
-2. **Test job** - Multi-platform testing with coverage
-3. **Build job** - Package verification
-4. **Changelog job** - PR validation for changelog fragments
-5. **Auto-release** - Triggered when version changes on main
-6. **Manual-release** - Workflow dispatch with version bump selection
+1. **Changeset check** - PR validation for changeset files
+2. **Lint job** - Formatting, vetting, static analysis, file size checks
+3. **Test job** - Multi-platform testing with coverage
+4. **Build job** - Package verification
+5. **Auto-release** - Triggered when PRs with changesets are merged
+6. **Manual release** - Workflow dispatch with instant or changeset mode
 
 ### Release Automation
 
 Two release modes:
 
-1. **Automatic**: Update version in `pkg/mypackage/mypackage.go`, merge to main
-2. **Manual**: Trigger workflow dispatch, select bump type (patch/minor/major)
+1. **Automatic**: Merge a PR with a changeset, version is bumped and released
+2. **Manual**: Trigger workflow dispatch:
+   - `instant` - Immediate release with specified bump type
+   - `changeset` - Process existing changesets
 
 ## Configuration
 
@@ -138,6 +151,11 @@ Two release modes:
 2. Rename `pkg/mypackage/` to your package name
 
 3. Update imports in all files
+
+4. Update `PACKAGE_NAME` in:
+   - `scripts/validate-changeset.mjs`
+   - `scripts/merge-changesets.mjs`
+   - `scripts/version-and-commit.mjs`
 
 ### Customizing Linting
 
@@ -157,11 +175,10 @@ bun scripts/check-file-size.mjs --max-lines 1500
 
 | Script | Purpose |
 |--------|---------|
-| `bump-version.mjs` | Bump version (major/minor/patch) |
 | `check-file-size.mjs` | Validate file line counts |
-| `collect-changelog.mjs` | Aggregate changelog fragments |
 | `create-github-release.mjs` | Create GitHub release |
-| `validate-changeset.mjs` | Check for changelog fragment in PR |
+| `merge-changesets.mjs` | Combine multiple changesets |
+| `validate-changeset.mjs` | Check for changeset in PR |
 | `version-and-commit.mjs` | Full release workflow |
 
 ## Example Usage

@@ -98,25 +98,30 @@ Add Multiply function for integer multiplication
 - Updates documentation with usage examples
 ```
 
-### Changelog Fragments
+### Changesets
 
-When making changes that should be documented:
+When making changes that should be documented, create a changeset file in `.changeset/`:
 
-1. Create a changelog fragment in `changelog.d/`:
+1. Create a new markdown file with a descriptive name:
    ```bash
-   touch changelog.d/$(date +%Y%m%d_%H%M%S)_short_description.md
+   touch .changeset/my-awesome-feature.md
    ```
 
-2. Add content using standard sections:
+2. Add content in the changeset format:
    ```markdown
-   ### Added
-   - Description of new feature
+   ---
+   'go-ai-driven-development-pipeline-template': minor
+   ---
 
-   ### Fixed
-   - Description of bug fix
+   Added new awesome feature that does X, Y, and Z.
    ```
 
-See `changelog.d/README.md` for more details.
+3. Choose the appropriate version bump:
+   - `patch` - Bug fixes and minor changes (0.0.x)
+   - `minor` - New features, backwards compatible (0.x.0)
+   - `major` - Breaking changes (x.0.0)
+
+See `.changeset/README.md` for more details.
 
 ## Pull Request Process
 
@@ -127,7 +132,7 @@ See `changelog.d/README.md` for more details.
    gofmt -l .
    ```
 
-2. Create a changelog fragment if your changes affect functionality
+2. Create a changeset file if your changes affect functionality
 
 3. Push your branch and create a pull request
 
@@ -228,15 +233,24 @@ go build ./...
 
 ## Release Process
 
-Releases are automated through GitHub Actions:
+Releases are automated through GitHub Actions using the changeset workflow:
 
-1. **Automatic releases**: When version is updated in `pkg/mypackage/mypackage.go` and merged to main
-2. **Manual releases**: Via workflow dispatch with version bump selection
+### Automatic Releases
 
-Maintainers can trigger a release by:
-1. Going to Actions > CI/CD Pipeline
-2. Clicking "Run workflow"
-3. Selecting the bump type (patch, minor, major)
+1. Create a PR with your changes
+2. Include a changeset file describing your changes
+3. When the PR is merged to main, the version is automatically bumped based on the changeset
+4. A new GitHub release is created
+
+### Manual Releases
+
+Maintainers can trigger a release manually:
+
+1. Go to Actions > CI/CD Pipeline
+2. Click "Run workflow"
+3. Select the release mode:
+   - `instant` - Immediate release with specified bump type
+   - `changeset` - Process existing changesets in the repository
 
 ## Questions?
 
