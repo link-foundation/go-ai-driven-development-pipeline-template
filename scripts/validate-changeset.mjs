@@ -15,6 +15,7 @@
 import { execSync } from "child_process";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
+import { printUntrusted } from "./github-actions-log.mjs";
 
 // Package name for the Go module (used in changeset frontmatter)
 const PACKAGE_NAME = "go-ai-driven-development-pipeline-template";
@@ -215,7 +216,7 @@ try {
   console.log(`Found ${changesetCount} changeset file(s) added by this PR`);
   if (changesetCount > 0) {
     console.log("Added changesets:");
-    addedChangesetFiles.forEach((file) => console.log(`  - ${file}`));
+    addedChangesetFiles.forEach((file) => printUntrusted(`  - ${file}`));
   }
 
   // Ensure exactly one changeset file was added
@@ -234,7 +235,9 @@ try {
       `::error::Multiple changesets found in this PR (${changesetCount}). Each PR should add exactly ONE changeset.`
     );
     console.error("::error::Found changeset files added by this PR:");
-    addedChangesetFiles.forEach((file) => console.error(`  ${file}`));
+    addedChangesetFiles.forEach((file) =>
+      printUntrusted(`  ${file}`, { stream: process.stderr })
+    );
     console.error(
       "\n::error::Please combine these into a single changeset or remove the extras."
     );
@@ -243,15 +246,21 @@ try {
 
   // Validate the single changeset file
   const changesetFile = join(CHANGESET_DIR, addedChangesetFiles[0]);
-  console.log(`Validating changeset: ${changesetFile}`);
+  console.log("Validating changeset:");
+  printUntrusted(changesetFile);
 
   const validation = validateChangesetFile(changesetFile);
 
   if (!validation.valid) {
-    console.error(`::error::${validation.error}`);
-    console.error(`\nFile content of ${changesetFile}:`);
+    console.error("::error::Changeset validation failed");
+    printUntrusted(validation.error, { stream: process.stderr });
+    console.error("\nInvalid changeset file:");
+    printUntrusted(changesetFile, { stream: process.stderr });
+    console.error("File content:");
     try {
-      console.error(readFileSync(changesetFile, "utf-8"));
+      printUntrusted(readFileSync(changesetFile, "utf-8"), {
+        stream: process.stderr,
+      });
     } catch {
       console.error("(could not read file)");
     }
@@ -260,11 +269,14 @@ try {
 
   console.log("Changeset validation passed");
   console.log(`   Type: ${validation.type}`);
-  console.log(`   Description: ${validation.description}`);
+  console.log("   Description:");
+  printUntrusted(validation.description);
 } catch (error) {
-  console.error("Error during changeset validation:", error.message);
+  console.error("::error::Unexpected error during changeset validation");
+  printUntrusted(error.message, { stream: process.stderr });
   if (process.env.DEBUG) {
-    console.error("Stack trace:", error.stack);
+    console.error("Stack trace:");
+    printUntrusted(error.stack, { stream: process.stderr });
   }
   process.exit(1);
 }

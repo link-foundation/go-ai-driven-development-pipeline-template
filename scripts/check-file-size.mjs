@@ -12,6 +12,7 @@
 
 import { readdirSync, readFileSync, statSync } from "fs";
 import { join, extname } from "path";
+import { printUntrusted } from "./github-actions-log.mjs";
 
 const DEFAULT_MAX_LINES = 1000;
 const IGNORE_DIRS = ["vendor", ".git", "node_modules", "testdata"];
@@ -72,7 +73,9 @@ function main() {
     if (violations.length > 0) {
       console.error("\nFile size violations found:");
       for (const { file, lineCount } of violations) {
-        console.error(`  ${file}: ${lineCount} lines (max: ${maxLines})`);
+        printUntrusted(`  ${file}: ${lineCount} lines (max: ${maxLines})`, {
+          stream: process.stderr,
+        });
       }
       console.error(`\nTotal violations: ${violations.length}`);
       process.exit(1);
@@ -80,7 +83,8 @@ function main() {
 
     console.log(`All ${goFiles.length} Go files are within the limit.`);
   } catch (error) {
-    console.error(`Error: ${error.message}`);
+    console.error("::error::File size check failed");
+    printUntrusted(error.message, { stream: process.stderr });
     process.exit(1);
   }
 }

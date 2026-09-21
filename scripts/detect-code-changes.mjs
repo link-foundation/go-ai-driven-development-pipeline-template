@@ -37,6 +37,7 @@
 
 import { execSync } from "child_process";
 import { appendFileSync } from "fs";
+import { printUntrusted } from "./github-actions-log.mjs";
 
 /**
  * Execute a shell command and return trimmed output
@@ -48,7 +49,7 @@ function exec(command) {
     return execSync(command, { encoding: "utf-8" }).trim();
   } catch (error) {
     console.error(`Error executing command: ${command}`);
-    console.error(error.message);
+    printUntrusted(error.message, { stream: process.stderr });
     return "";
   }
 }
@@ -90,7 +91,8 @@ function getChangedFiles() {
         const output = exec(`git diff --name-only ${baseSha} ${headSha}`);
         return output ? output.split("\n").filter(Boolean) : [];
       } catch (error) {
-        console.error(`Git diff failed: ${error.message}`);
+        console.error("Git diff failed:");
+        printUntrusted(error.message, { stream: process.stderr });
       }
     }
   }
@@ -143,7 +145,7 @@ function detectChanges() {
   if (changedFiles.length === 0) {
     console.log("  (none)");
   } else {
-    changedFiles.forEach((file) => console.log(`  ${file}`));
+    changedFiles.forEach((file) => printUntrusted(`  ${file}`));
   }
   console.log("");
 
@@ -180,7 +182,7 @@ function detectChanges() {
   if (codeChangedFiles.length === 0) {
     console.log("  (none)");
   } else {
-    codeChangedFiles.forEach((file) => console.log(`  ${file}`));
+    codeChangedFiles.forEach((file) => printUntrusted(`  ${file}`));
   }
   console.log("");
 

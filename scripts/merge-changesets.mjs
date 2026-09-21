@@ -24,6 +24,7 @@ import {
   statSync,
 } from "fs";
 import { join } from "path";
+import { printUntrusted } from "./github-actions-log.mjs";
 
 // Package name for the Go module (used in changeset frontmatter)
 const PACKAGE_NAME = "go-ai-driven-development-pipeline-template";
@@ -128,9 +129,8 @@ function parseChangeset(filePath) {
     const versionTypeMatch = content.match(versionTypeRegex);
 
     if (!versionTypeMatch) {
-      console.warn(
-        `Warning: Could not parse version type from ${filePath}, skipping`
-      );
+      console.warn("Warning: Could not parse version type; skipping file:");
+      printUntrusted(filePath);
       return null;
     }
 
@@ -145,7 +145,9 @@ function parseChangeset(filePath) {
       mtime: stats.mtime,
     };
   } catch (error) {
-    console.warn(`Warning: Failed to parse ${filePath}: ${error.message}`);
+    console.warn("Warning: Failed to parse changeset:");
+    printUntrusted(filePath);
+    printUntrusted(error.message);
     return null;
   }
 }
@@ -199,7 +201,7 @@ function main() {
   }
 
   console.log("Multiple changesets found, merging...");
-  changesetFiles.forEach((file) => console.log(`  - ${file}`));
+  changesetFiles.forEach((file) => printUntrusted(`  - ${file}`));
 
   // Parse all changesets
   const parsedChangesets = [];
@@ -253,11 +255,13 @@ function main() {
   console.log("\nRemoving original changeset files:");
   for (const changeset of parsedChangesets) {
     unlinkSync(changeset.filePath);
-    console.log(`  Removed: ${changeset.file}`);
+    console.log("  Removed:");
+    printUntrusted(changeset.file);
   }
 
   console.log("\nChangeset merge completed successfully");
-  console.log(`\nMerged changeset content:\n${mergedContent}`);
+  console.log("\nMerged changeset content:");
+  printUntrusted(mergedContent);
 }
 
 main();
