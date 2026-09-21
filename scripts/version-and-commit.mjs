@@ -32,6 +32,7 @@ import {
 } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import { printUntrusted } from "./github-actions-log.mjs";
 
 // Package name for the Go module (used in changeset frontmatter)
 const PACKAGE_NAME = "go-ai-driven-development-pipeline-template";
@@ -164,7 +165,8 @@ function deleteChangesets() {
   for (const file of changesetFiles) {
     const filePath = join(CHANGESET_DIR, file);
     unlinkSync(filePath);
-    console.log(`Deleted changeset: ${file}`);
+    console.log("Deleted changeset:");
+    printUntrusted(file);
   }
 }
 
