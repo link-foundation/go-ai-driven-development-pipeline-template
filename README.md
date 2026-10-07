@@ -68,7 +68,9 @@ pre-commit install
 │       ├── mypackage.go         # Main library code
 │       └── mypackage_test.go    # Tests
 ├── scripts/
+│   ├── ci/check-dependencies.mjs # CI dependency freshness and pin integrity
 │   ├── check-file-size.mjs      # File size validation
+│   ├── check-release-needed.mjs # Interrupted release recovery
 │   ├── create-github-release.mjs # Release creation
 │   ├── merge-changesets.mjs     # Merge multiple changesets
 │   ├── validate-changeset.mjs   # PR validation
@@ -139,6 +141,26 @@ Two release modes:
    - `instant` - Immediate release with specified bump type
    - `changeset` - Process existing changesets
 
+If a release fails after its version commit and tag are pushed, the next push
+to `main` with no changesets retries the current version. It checks for a missing
+GitHub release, verifies the tagged module on the Go proxy, and creates the
+release using the existing changelog entry without bumping the version. Existing
+releases are skipped; authentication or network errors emit a warning and skip
+recovery. A version without a tag is also skipped.
+
+CI uses `ubuntu-24.04`, `macos-15`, and `windows-2025`, with Go 1.27.1 and
+Bun 1.4.2. The module's Go 1.21 minimum remains compatible with existing consumers.
+Workflow checks reject runner aliases and check action SHAs, container digests,
+and tool versions against current stable releases on workflow changes and every
+Monday. To check pins locally, authenticate `gh` and run:
+
+```bash
+bun scripts/ci/check-dependencies.mjs
+```
+
+When upstream versions change, update the pinned version and immutable reference
+together; action and container version comments must describe the pinned release.
+
 ## Configuration
 
 ### Updating Package Name
@@ -176,6 +198,8 @@ bun scripts/check-file-size.mjs --max-lines 1500
 | Script | Purpose |
 |--------|---------|
 | `check-file-size.mjs` | Validate file line counts |
+| `check-release-needed.mjs` | Detect a missing release for the current tag |
+| `ci/check-dependencies.mjs` | Check CI dependency freshness and pin integrity |
 | `create-github-release.mjs` | Create GitHub release |
 | `merge-changesets.mjs` | Combine multiple changesets |
 | `validate-changeset.mjs` | Check for changeset in PR |

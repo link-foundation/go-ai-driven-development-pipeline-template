@@ -7,7 +7,7 @@ Thank you for considering contributing to this project! This document outlines t
 ### Prerequisites
 
 - Go 1.21 or later
-- Bun (for running scripts)
+- Bun 1.4.2 (for running scripts; matches CI)
 - Git
 - pre-commit (optional, but recommended)
 
@@ -227,6 +227,12 @@ go test -race ./...
 # File size check
 bun scripts/check-file-size.mjs
 
+# Release script and workflow regression tests
+bun test ./scripts
+
+# CI dependency freshness and pin integrity (requires authenticated gh)
+bun scripts/ci/check-dependencies.mjs
+
 # Build verification
 go build ./...
 ```
@@ -241,6 +247,17 @@ Releases are automated through GitHub Actions using the changeset workflow:
 2. Include a changeset file describing your changes
 3. When the PR is merged to main, the version is automatically bumped based on the changeset
 4. A new GitHub release is created
+
+If the release was interrupted after the tag was pushed, a later push to main
+with no changesets recovers the current release without a version bump. Recovery
+requires an existing tag and an explicit `release not found` response from `gh`;
+other lookup errors warn and skip recovery. Go proxy verification still runs
+before creating the release.
+
+CI tests with Go 1.27.1 while `go.mod` retains the Go 1.21 consumer minimum.
+Runner images and CI dependencies are pinned. Workflow checks validate their
+freshness and immutable references on relevant changes and weekly; update both
+the reference and its version comment when upgrading an action or container.
 
 ### Manual Releases
 

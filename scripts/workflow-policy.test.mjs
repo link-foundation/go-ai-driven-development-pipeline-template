@@ -123,4 +123,35 @@ describe("release workflow policy", () => {
       assert.ok(announce > verify, `${name} announces before verification`);
     }
   });
+  test("recovers a tagged release after its changesets have been consumed", () => {
+    const job = jobBlock(workflow, "auto-release");
+    assert.match(job, /name: Check for missing release/);
+    assert.match(
+      job,
+      /if: steps\.check_changesets\.outputs\.has_changesets == 'false'/
+    );
+    assert.match(job, /run: bun scripts\/check-release-needed\.mjs/);
+    for (const step of [
+      "Verify module availability",
+      "Create GitHub Release",
+    ]) {
+      const block = job
+        .slice(job.indexOf(`name: ${step}`))
+        .split(/\n      - name:/)[0];
+      assert.match(block, /steps\.recovery\.outputs\.release_needed == 'true'/);
+      assert.doesNotMatch(block, /has_changesets/);
+    }
+  });
+
+  test("pins hosted runners and tool versions", () => {
+    for (const path of workflowPaths()) {
+      const source = readWorkflow(path);
+      assert.doesNotMatch(source, /(?:ubuntu|macos|windows)-latest/);
+      assert.doesNotMatch(source, /(?:bun-version|go-version):\s*['"]?latest/);
+      assert.doesNotMatch(
+        source,
+        /uses: actions\/(?:checkout|setup-go)@v[45]\b/
+      );
+    }
+  });
 });
