@@ -13,7 +13,8 @@
 
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
+import { printUntrusted } from "./github-actions-log.mjs";
 
 const CHANGELOG_FILE = join(process.cwd(), "CHANGELOG.md");
 
@@ -34,18 +35,18 @@ function parseArgs() {
   return result;
 }
 
-function extractReleaseNotes(version) {
-  if (!existsSync(CHANGELOG_FILE)) {
-    return null;
-  }
-
-  const changelog = readFileSync(CHANGELOG_FILE, "utf-8");
+export function extractReleaseNotes(
+  version,
+  changelog = existsSync(CHANGELOG_FILE)
+    ? readFileSync(CHANGELOG_FILE, "utf-8")
+    : null
+) {
+  if (!changelog) return null;
 
   // Match the section for this version
   const escapedVersion = version.replace(/\./g, "\\.");
   const pattern = new RegExp(
-    `## \\[${escapedVersion}\\][^\\n]*\\n\\n([\\s\\S]*?)(?=## \\[|$)`,
-    "m"
+    `## \\[${escapedVersion}\\][^\\n]*\\n\\n([\\s\\S]*?)(?=\\n## \\[|$)`
   );
 
   const match = changelog.match(pattern);
@@ -56,27 +57,39 @@ function extractReleaseNotes(version) {
   return null;
 }
 
-function createRelease(version, notes, repository) {
+export function createRelease(version, notes, repository, run = execFileSync) {
+  if (!/^\d+\.\d+\.\d+$/.test(version))
+    throw new Error("Invalid release version");
   const tag = `v${version}`;
   const title = `Release ${tag}`;
   const body = notes || `Release ${tag}`;
 
-  let cmd = `gh release create "${tag}" --title "${title}"`;
+  const args = [
+    "release",
+    "create",
+    tag,
+    "--verify-tag",
+    "--title",
+    title,
+    "--notes-file",
+    "-",
+  ];
 
   if (repository) {
-    cmd += ` --repo "${repository}"`;
+    args.push("--repo", repository);
   }
 
   // Use stdin for body to avoid shell escaping issues
   try {
-    execSync(cmd + " --notes-file -", {
+    run("gh", args, {
       input: body,
-      stdio: ["pipe", "inherit", "inherit"],
+      encoding: "utf8",
+      stdio: ["pipe", "inherit", "pipe"],
     });
     console.log(`Created release: ${tag}`);
   } catch (error) {
     // Check if release already exists
-    if (error.message.includes("already exists")) {
+    if (error.stderr?.includes("already exists")) {
       console.log(`Release ${tag} already exists, skipping.`);
     } else {
       throw error;
@@ -105,9 +118,10 @@ function main() {
 
     createRelease(version, notes, repository);
   } catch (error) {
-    console.error(`Error: ${error.message}`);
+    console.error("::error::Could not create the GitHub release");
+    printUntrusted(error.message, { stream: process.stderr });
     process.exit(1);
   }
 }
 
-main();
+if (import.meta.main) main();
