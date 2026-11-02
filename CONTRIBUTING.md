@@ -7,7 +7,7 @@ Thank you for considering contributing to this project! This document outlines t
 ### Prerequisites
 
 - Go 1.21 or later
-- Bun 1.4.2 (for running scripts; matches CI)
+- Bun 1.4.4 (for running scripts; matches CI)
 - Git
 - pre-commit (optional, but recommended)
 
@@ -254,10 +254,14 @@ requires an existing tag and an explicit `release not found` response from `gh`;
 other lookup errors warn and skip recovery. Go proxy verification still runs
 before creating the release.
 
-CI tests with Go 1.27.1 while `go.mod` retains the Go 1.21 consumer minimum.
+CI tests with Go 1.27.3 while `go.mod` retains the Go 1.21 consumer minimum.
 Runner images and CI dependencies are pinned. Workflow checks validate their
 freshness and immutable references on relevant changes and weekly; update both
 the reference and its version comment when upgrading an action or container.
+Newer upstream releases fail pull requests but only warn on push, schedule and
+manual runs; Dependabot proposes action bumps weekly. Jobs that never got a
+hosted runner are reported as "Hosted runner not acquired" by the Pipeline
+Status job and rerun automatically, at most twice.
 
 ### Manual Releases
 

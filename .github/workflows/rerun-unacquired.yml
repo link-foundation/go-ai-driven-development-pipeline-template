@@ -1,0 +1,60 @@
+name: Rerun infrastructure failures
+
+# Reruns a "CI/CD Pipeline" run whose only failures are jobs that never got a
+# hosted runner (issue #14), via scripts/ci/rerun-unacquired.mjs. GitHub
+# sometimes cannot hand out a hosted macOS runner and gives up on the job with
+# "The job was not acquired by Runner of type hosted even after multiple
+# attempts". No code ran, yet the release gate refused to release.
+#
+# A job that ran steps and failed is never rerun, and a run is retried at most
+# twice (three attempts). `gh run rerun --failed` also reruns the jobs that
+# depend on the rerun ones, so build, release and Pipeline Status run again.
+#
+# workflow_run is safe here: this workflow checks out the default branch only,
+# runs nothing from the triggering run, reads that run through the API and can
+# only ask GitHub to rerun it. Runs from forks are ignored.
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: ['CI/CD Pipeline']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    name: Rerun jobs that never got a runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    concurrency:
+      group: rerun-unacquired-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    permissions:
+      # actions: write for `gh run rerun`; checks: read for job annotations.
+      actions: write
+      checks: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.4'
+
+      - name: Rerun jobs that never got a hosted runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_VERBOSE: ${{ vars.CI_VERBOSE || 'false' }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: >-
+          bun scripts/ci/rerun-unacquired.mjs
+          --repository "$REPOSITORY" --run-id "$RUN_ID" --attempt "$ATTEMPT"

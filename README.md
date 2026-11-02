@@ -59,8 +59,11 @@ pre-commit install
 │   ├── config.json              # Changeset configuration
 │   └── README.md                # Changeset instructions
 ├── .github/
+│   ├── dependabot.yml           # Weekly bumps for pinned actions
 │   └── workflows/
-│       └── release.yml          # CI/CD pipeline
+│       ├── release.yml          # CI/CD pipeline
+│       ├── rerun-unacquired.yml # Rerun jobs that never got a runner
+│       └── workflows.yml        # Workflow lint, policy and pin checks
 ├── examples/
 │   └── basic_usage.go           # Usage examples
 ├── pkg/
@@ -69,6 +72,8 @@ pre-commit install
 │       └── mypackage_test.go    # Tests
 ├── scripts/
 │   ├── ci/check-dependencies.mjs # CI dependency freshness and pin integrity
+│   ├── ci/check-pipeline-status.mjs # Terminal status gate
+│   ├── ci/rerun-unacquired.mjs  # Rerun runner-acquisition failures
 │   ├── check-file-size.mjs      # File size validation
 │   ├── check-release-needed.mjs # Interrupted release recovery
 │   ├── create-github-release.mjs # Release creation
@@ -148,8 +153,8 @@ release using the existing changelog entry without bumping the version. Existing
 releases are skipped; authentication or network errors emit a warning and skip
 recovery. A version without a tag is also skipped.
 
-CI uses `ubuntu-24.04`, `macos-15`, and `windows-2025`, with Go 1.27.1 and
-Bun 1.4.2. The module's Go 1.21 minimum remains compatible with existing consumers.
+CI uses `ubuntu-24.04`, `macos-15`, and `windows-2025`, with Go 1.27.3 and
+Bun 1.4.4. The module's Go 1.21 minimum remains compatible with existing consumers.
 Workflow checks reject runner aliases and check action SHAs, container digests,
 and tool versions against current stable releases on workflow changes and every
 Monday. To check pins locally, authenticate `gh` and run:
@@ -160,6 +165,34 @@ bun scripts/ci/check-dependencies.mjs
 
 When upstream versions change, update the pinned version and immutable reference
 together; action and container version comments must describe the pinned release.
+
+A newer upstream release is a fact about the world, not about a commit, so it
+only fails pull requests (and local runs), where a contributor can act on it. On
+push, the weekly schedule and manual runs it is reported as a warning and in the
+job summary. Broken pins and failed lookups fail on every event. Dependabot
+(`.github/dependabot.yml`) opens a weekly grouped pull request for action bumps,
+which does not need a changeset; Bun, Go, staticcheck, the actionlint container
+and runner images stay with the scheduled warning.
+
+### Hosted runner failures
+
+GitHub sometimes cannot hand out a hosted runner, usually for macOS, and gives
+up on the job with "The job was not acquired by Runner of type hosted even after
+multiple attempts". No code ran, so:
+
+- the terminal **Pipeline Status** job reports such a job as
+  "Hosted runner not acquired" instead of a code failure, and
+- `rerun-unacquired.yml` reruns the failed jobs and everything that depends on
+  them (build, release, status gate) when those are the only failures, at most
+  twice. A run in which a job ran steps and failed is never rerun.
+
+When the reruns are used up, rerun later with
+`gh run rerun <run-id> --failed`. If macOS coverage is not needed to release,
+you can make that leg non-blocking with
+`continue-on-error: ${{ matrix.os == 'macos-15' }}` on the `test` job; then
+`needs.test.result` reports success even when that leg fails, so watch its own
+annotation. Set the repository variable `CI_VERBOSE=true` to trace how jobs are
+classified.
 
 ## Configuration
 
@@ -200,6 +233,8 @@ bun scripts/check-file-size.mjs --max-lines 1500
 | `check-file-size.mjs` | Validate file line counts |
 | `check-release-needed.mjs` | Detect a missing release for the current tag |
 | `ci/check-dependencies.mjs` | Check CI dependency freshness and pin integrity |
+| `ci/check-pipeline-status.mjs` | Fail the pipeline and explain each unsuccessful job |
+| `ci/rerun-unacquired.mjs` | Rerun runs whose only failures never got a hosted runner |
 | `create-github-release.mjs` | Create GitHub release |
 | `merge-changesets.mjs` | Combine multiple changesets |
 | `validate-changeset.mjs` | Check for changeset in PR |

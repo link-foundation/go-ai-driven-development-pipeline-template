@@ -2,8 +2,14 @@
 
 // Check active CI pins against upstream releases, including immutable ref integrity.
 // Registry errors fail the check so unavailable metadata cannot conceal stale pins.
+//
+// A newer upstream release is a fact about the world, not about the commit, so
+// it only fails the check where a contributor can act on it: pull requests and
+// local runs. On push, schedule and workflow_dispatch it is reported as a
+// warning and in the step summary, and Dependabot proposes the bump. Pin
+// integrity, malformed pins and lookup failures fail on every event.
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { printUntrusted } from "../github-actions-log.mjs";
 
 const VERSION = /^\d+\.\d+\.\d+$/;
@@ -83,7 +89,10 @@ async function latestVersion(dependency) {
     const releases = await getJson("https://go.dev/dl/?mode=json");
     const version = releases.find((release) => release.stable)?.version;
     if (!version) throw new Error("Go endpoint returned no stable releases");
-    return version.replace(/^go/, "");
+    const current = version.replace(/^go/, "");
+    if (!VERSION.test(current))
+      throw new Error(`Unsupported upstream release ${version}`);
+    return current;
   }
   const release = github(`repos/${dependency.name}/releases/latest`);
   if (release.draft || release.prerelease)
@@ -141,9 +150,10 @@ export async function checkDependencies(
         versions.set(dependency.name, await latest(dependency));
       const current = versions.get(dependency.name);
       if (dependency.version !== current) {
-        errors.push(
-          `${dependency.location}: ${dependency.name} pins ${dependency.version}; latest stable is ${current}`
-        );
+        errors.push({
+          stale: true,
+          message: `${dependency.location}: ${dependency.name} pins ${dependency.version}; latest stable is ${current}`,
+        });
         continue;
       }
       const key = `${dependency.name}@${dependency.ref}`;
@@ -152,12 +162,75 @@ export async function checkDependencies(
         pins.add(key);
       }
     } catch (error) {
-      errors.push(
-        `${dependency.location}: ${dependency.name}: ${error.message}`
-      );
+      errors.push({
+        stale: false,
+        message: `${dependency.location}: ${dependency.name}: ${error.message}`,
+      });
     }
   }
   return errors;
+}
+
+// Events whose commit did not cause a newer upstream release. Every other
+// event, including pull_request and a local run, gates on stale pins.
+export const WARN_ONLY_EVENTS = new Set(["push", "schedule", "workflow_dispatch"]);
+
+/**
+ * Print the outcome and return the process exit code.
+ *
+ * @param {{stale: boolean, message: string}[]} errors
+ * @param {{event?: string, total?: number, summaryFile?: string,
+ *   stdout?: {write: (text: string) => unknown},
+ *   stderr?: {write: (text: string) => unknown}, githubActions?: boolean}} options
+ */
+export function report(errors, options = {}) {
+  const {
+    event = "",
+    total = 0,
+    summaryFile,
+    stdout = process.stdout,
+    stderr = process.stderr,
+    githubActions,
+  } = options;
+  const gate = !WARN_ONLY_EVENTS.has(event);
+  const failing = errors.filter((error) => gate || !error.stale);
+  const warnings = errors.filter((error) => !failing.includes(error));
+  const print = (error, stream) =>
+    printUntrusted(error.message, { stream, githubActions });
+
+  if (warnings.length) {
+    stdout.write(
+      `::warning title=Newer CI dependency releases::${warnings.length} pinned CI dependencies have newer upstream releases. ` +
+        `This does not fail ${event} runs; update the pins (Dependabot proposes action bumps).\n`
+    );
+    for (const error of warnings) print(error, stdout);
+  }
+  if (failing.length) {
+    stderr.write("::error::CI dependencies need attention\n");
+    for (const error of failing) print(error, stderr);
+  }
+  if (!errors.length) {
+    stdout.write(
+      `All ${total} CI dependency pins match current stable releases\n`
+    );
+  }
+
+  if (summaryFile && errors.length) {
+    // Backticks are removed so upstream text cannot break out of code spans.
+    const line = (error) => `- \`${error.message.replaceAll("`", "'")}\``;
+    const sections = ["## CI dependency check\n"];
+    if (failing.length)
+      sections.push(
+        `### Failing (${failing.length})\n\n${failing.map(line).join("\n")}\n`
+      );
+    if (warnings.length)
+      sections.push(
+        `### Newer upstream releases (warning on \`${event}\`, gating on pull requests) (${warnings.length})\n\n` +
+          `${warnings.map(line).join("\n")}\n`
+      );
+    appendFileSync(summaryFile, `${sections.join("\n")}\n`);
+  }
+  return failing.length ? 1 : 0;
 }
 
 async function main() {
@@ -170,16 +243,11 @@ async function main() {
     }));
   const dependencies = findDependencies(workflows);
   const errors = await checkDependencies(dependencies);
-  if (errors.length) {
-    console.error("::error::CI dependencies need attention");
-    for (const error of errors)
-      printUntrusted(error, { stream: process.stderr });
-    process.exitCode = 1;
-  } else {
-    console.log(
-      `All ${dependencies.length} CI dependency pins match current stable releases`
-    );
-  }
+  process.exitCode = report(errors, {
+    event: process.env.GITHUB_EVENT_NAME,
+    total: dependencies.length,
+    summaryFile: process.env.GITHUB_STEP_SUMMARY,
+  });
 }
 
 if (import.meta.main) {
