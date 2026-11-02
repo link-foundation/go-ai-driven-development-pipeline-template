@@ -67,7 +67,8 @@ jobs:
         run: bun scripts/detect-code-changes.mjs
 
   # === CHANGESET CHECK - only runs on PRs with code changes ===
-  # Docs-only PRs (./docs folder, markdown files) don't require changesets
+  # Docs-only PRs (./docs folder, markdown files) don't require changesets.
+  # Dependabot PRs only bump CI pins, which publish nothing, so they are exempt.
   changeset-check:
     name: Check for Changeset
     runs-on: ubuntu-24.04
@@ -75,7 +76,7 @@ jobs:
       group: check-${{ github.workflow }}-${{ github.ref }}-changeset-check
       cancel-in-progress: true
     needs: [detect-changes]
-    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.any-code-changed == 'true'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]' && needs.detect-changes.outputs.any-code-changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -406,3 +407,47 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.new_version }}
         run: bun scripts/create-github-release.mjs --version "$VERSION"
+
+  # === PIPELINE STATUS - terminal gate that explains every failure ===
+  # Fails when any job above failed or was cancelled, and reports jobs that
+  # never got a hosted runner as "Hosted runner not acquired" (infrastructure,
+  # rerun automatically by rerun-unacquired.yml) instead of a code failure.
+  pipeline-status:
+    name: Pipeline Status
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    needs:
+      [
+        detect-changes,
+        changeset-check,
+        lint,
+        test,
+        build,
+        auto-release,
+        instant-release,
+        changeset-release,
+      ]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.4'
+
+      - name: Check pipeline status
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+          CI_VERBOSE: ${{ vars.CI_VERBOSE || 'false' }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: bun scripts/ci/check-pipeline-status.mjs

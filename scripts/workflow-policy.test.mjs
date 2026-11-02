@@ -143,6 +143,27 @@ describe("release workflow policy", () => {
     }
   });
 
+  test("ends with a status gate that explains every failure", () => {
+    const job = jobBlock(workflow, "pipeline-status");
+    const jobs = [...workflow.slice(workflow.indexOf("\njobs:")).matchAll(/^  ([a-zA-Z0-9_-]+):\s*$/gm)]
+      .map((match) => match[1])
+      .filter((name) => name !== "pipeline-status");
+    for (const name of jobs)
+      assert.match(job, new RegExp(`\\b${name},`), `gate does not need ${name}`);
+    assert.match(job, /if: always\(\)/);
+    assert.match(job, /permissions:\n      actions: read\n      checks: read\n      contents: read/);
+    assert.match(job, /NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}/);
+    assert.match(job, /run: bun scripts\/ci\/check-pipeline-status\.mjs/);
+  });
+
+  test("does not require changesets from Dependabot pin bumps", () => {
+    const job = jobBlock(workflow, "changeset-check");
+    assert.match(
+      job,
+      /github\.event\.pull_request\.user\.login != 'dependabot\[bot\]'/
+    );
+  });
+
   test("pins hosted runners and tool versions", () => {
     for (const path of workflowPaths()) {
       const source = readWorkflow(path);
@@ -153,5 +174,40 @@ describe("release workflow policy", () => {
         /uses: actions\/(?:checkout|setup-go)@v[45]\b/
       );
     }
+  });
+});
+
+describe("infrastructure failure policy", () => {
+  const rerun = readWorkflow(`${WORKFLOW_DIRECTORY}/rerun-unacquired.yml`);
+
+  test("reruns only failed same-repository CI/CD runs", () => {
+    const release = readWorkflow();
+    const name = release.match(/^name: (.+)$/m)[1];
+    assert.match(rerun, new RegExp(`workflows: \\['${name.replace(/[/]/g, "\\/")}'\\]`));
+    assert.match(rerun, /types: \[completed\]/);
+    assert.match(rerun, /github\.event\.workflow_run\.conclusion == 'failure'/);
+    assert.match(
+      rerun,
+      /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/
+    );
+    assert.match(rerun, /run: >-\n\s+bun scripts\/ci\/rerun-unacquired\.mjs/);
+  });
+
+  test("never runs code from the triggering run and holds minimal permissions", () => {
+    assert.match(rerun, /^permissions:\n  contents: read$/m);
+    assert.match(rerun, /actions: write\n      checks: read\n      contents: read/);
+    assert.match(rerun, /persist-credentials: false/);
+    assert.doesNotMatch(rerun, /ref:|head_sha|head_branch|pull_requests/);
+    assert.match(rerun, /timeout-minutes: 5/);
+  });
+});
+
+describe("Dependabot policy", () => {
+  test("proposes weekly grouped bumps for pinned actions", () => {
+    const config = readFileSync(".github/dependabot.yml", "utf8");
+    assert.match(config, /package-ecosystem: github-actions\n    directory: \//);
+    assert.match(config, /interval: weekly/);
+    assert.match(config, /cooldown:\n      default-days: 7/);
+    assert.match(config, /patterns: \['\*'\]/);
   });
 });
