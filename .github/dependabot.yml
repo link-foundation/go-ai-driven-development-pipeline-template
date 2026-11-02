@@ -1,0 +1,22 @@
+# Proposes bumps for SHA-pinned GitHub Actions, so the weekly dependency
+# freshness warning on main turns into a pull request (issue #13). Dependabot
+# rewrites the SHA and its `# vX.Y.Z` comment together, which keeps
+# scripts/ci/check-dependencies.mjs satisfied.
+#
+# Tool pins that Dependabot cannot see (`bun-version`, `go-version`,
+# staticcheck, the actionlint container digest and runner images) stay with
+# the scheduled warning from the "Workflow checks" workflow.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci

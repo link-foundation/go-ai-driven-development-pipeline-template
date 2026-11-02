@@ -148,8 +148,8 @@ release using the existing changelog entry without bumping the version. Existing
 releases are skipped; authentication or network errors emit a warning and skip
 recovery. A version without a tag is also skipped.
 
-CI uses `ubuntu-24.04`, `macos-15`, and `windows-2025`, with Go 1.27.1 and
-Bun 1.4.2. The module's Go 1.21 minimum remains compatible with existing consumers.
+CI uses `ubuntu-24.04`, `macos-15`, and `windows-2025`, with Go 1.27.3 and
+Bun 1.4.4. The module's Go 1.21 minimum remains compatible with existing consumers.
 Workflow checks reject runner aliases and check action SHAs, container digests,
 and tool versions against current stable releases on workflow changes and every
 Monday. To check pins locally, authenticate `gh` and run:
