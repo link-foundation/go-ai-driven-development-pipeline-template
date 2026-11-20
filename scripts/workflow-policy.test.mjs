@@ -15,6 +15,12 @@ function workflowPaths() {
     .map((file) => `${WORKFLOW_DIRECTORY}/${file}`);
 }
 
+function jobNames(workflow) {
+  return [...workflow.slice(workflow.indexOf("\njobs:"))
+    .matchAll(/^  ([a-zA-Z0-9_-]+):[ \t]*$/gm)]
+    .map((match) => match[1]);
+}
+
 function jobBlock(workflow, name) {
   const lines = workflow.split("\n");
   const start = lines.findIndex((line) => line === `  ${name}:`);
@@ -68,10 +74,48 @@ describe("release workflow policy", () => {
     }
   });
 
-  test("propagates cancellation through the test dependency graph", () => {
-    const testJob = jobBlock(workflow, "test");
-    assert.match(testJob, /!cancelled\(\)/);
-    assert.doesNotMatch(testJob, /always\(\)/);
+  test("bounds every workflow job with an explicit job-level timeout", () => {
+    for (const path of workflowPaths()) {
+      const source = readWorkflow(path);
+      const jobs = jobNames(source);
+      assert.ok(jobs.length, `${path} has no jobs`);
+      for (const name of jobs) {
+        const timeout = jobBlock(source, name).match(/^    timeout-minutes: ([1-9]\d*)$/m);
+        assert.ok(timeout, `${path}: ${name} needs an explicit job timeout`);
+        assert.ok(Number(timeout[1]) < 360, `${path}: ${name} timeout is too long`);
+      }
+    }
+  });
+
+  test("runs required checks on dispatch despite intentionally skipped detection", () => {
+    assert.match(jobBlock(workflow, "detect-changes"), /if: github\.event_name != 'workflow_dispatch'/);
+    for (const name of ["lint", "test"]) {
+      const job = jobBlock(workflow, name);
+      assert.match(job, /^    needs: \[detect-changes(?:, changeset-check)?\]$/m);
+      assert.match(job, /!cancelled\(\) &&\s+\(needs\.detect-changes\.result == 'success' \|\|\s+\(github\.event_name == 'workflow_dispatch' && needs\.detect-changes\.result == 'skipped'\)\) &&/);
+    }
+  });
+
+  test("gates build and publication on successful direct prerequisites", () => {
+    const build = jobBlock(workflow, "build");
+    assert.match(build, /^    needs: \[lint, test\]$/m);
+    assert.match(build, /!cancelled\(\) &&\s+needs\.lint\.result == 'success' && needs\.test\.result == 'success'/);
+
+    const prerequisites = /needs\.lint\.result == 'success' && needs\.test\.result == 'success' && needs\.build\.result == 'success'/;
+    for (const mode of ["auto", "instant", "changeset"]) {
+      const job = jobBlock(workflow, `${mode}-release`);
+      assert.match(job, /^    needs: \[lint, test, build\]$/m);
+      const condition = job.match(/^    if: \|\n((?:^      .+\n)+)/m)?.[1] ?? "";
+      assert.match(condition, /!cancelled\(\) &&/);
+      assert.match(condition, prerequisites);
+      if (mode === "auto") {
+        assert.match(condition, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+      } else {
+        assert.ok(condition.includes(`github.event_name == 'workflow_dispatch' && inputs.release_mode == '${mode}' &&`));
+        assert.match(job, /name: Require a release commit\n +if: steps\.version\.outputs\.version_committed != 'true'\n +run: \|\n +echo .+\n +exit 1/);
+        assert.ok(job.indexOf("name: Require a release commit") < job.indexOf("name: Verify module availability"));
+      }
+    }
   });
 
   test("grants write permission only to release writers", () => {
@@ -145,14 +189,13 @@ describe("release workflow policy", () => {
 
   test("ends with a status gate that explains every failure", () => {
     const job = jobBlock(workflow, "pipeline-status");
-    const jobs = [...workflow.slice(workflow.indexOf("\njobs:")).matchAll(/^  ([a-zA-Z0-9_-]+):\s*$/gm)]
-      .map((match) => match[1])
-      .filter((name) => name !== "pipeline-status");
+    const jobs = jobNames(workflow).filter((name) => name !== "pipeline-status");
     for (const name of jobs)
       assert.match(job, new RegExp(`\\b${name},`), `gate does not need ${name}`);
     assert.match(job, /if: always\(\)/);
     assert.match(job, /permissions:\n      actions: read\n      checks: read\n      contents: read/);
     assert.match(job, /NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}/);
+    assert.match(job, /RELEASE_MODE: \$\{\{ inputs\.release_mode \}\}/);
     assert.match(job, /run: bun scripts\/ci\/check-pipeline-status\.mjs/);
   });
 

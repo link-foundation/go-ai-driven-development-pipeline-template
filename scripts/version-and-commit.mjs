@@ -32,6 +32,7 @@ import {
 } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import { git } from "./git-comparison.mjs";
 import { printUntrusted } from "./github-actions-log.mjs";
 
 // Package name for the Go module (used in changeset frontmatter)
@@ -225,10 +226,6 @@ function run(cmd) {
   return execSync(cmd, { stdio: "inherit" });
 }
 
-function runCapture(cmd) {
-  return execSync(cmd, { encoding: "utf-8" }).trim();
-}
-
 function setOutput(key, value) {
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
@@ -309,14 +306,16 @@ function main() {
 
     // Check if there are changes to commit
     try {
-      runCapture("git diff --cached --quiet");
+      git("diff", "--cached", "--quiet");
       console.log("No changes to commit");
       setOutput("version_committed", "false");
-    } catch {
-      // There are changes, commit them
-      run(`git commit -m "chore: release v${newVersion}"`);
-      setOutput("version_committed", "true");
+      return;
+    } catch (error) {
+      // Only exit status 1 means that the diff found changes.
+      if (error.status !== 1) throw error;
     }
+    run(`git commit -m "chore: release v${newVersion}"`);
+    setOutput("version_committed", "true");
 
     // Create tag
     const tag = `v${newVersion}`;
@@ -332,7 +331,8 @@ function main() {
     setOutput("new_version", newVersion);
     setOutput("tag", tag);
   } catch (error) {
-    console.error(`Error: ${error.message}`);
+    console.error("::error::Version and commit failed");
+    printUntrusted(error.message, { stream: process.stderr });
     process.exit(1);
   }
 }

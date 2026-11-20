@@ -109,6 +109,10 @@ describe("printing contributor-authored CI log text", () => {
       "scripts/validate-changeset.mjs",
       join(root, "scripts/validate-changeset.mjs")
     );
+    copyFileSync(
+      "scripts/git-comparison.mjs",
+      join(root, "scripts/git-comparison.mjs")
+    );
     writeChangeset(root, fileName, payload);
 
     const result = runFixture(root, "validate-changeset.mjs");

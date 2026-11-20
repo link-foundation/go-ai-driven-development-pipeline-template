@@ -12,9 +12,9 @@
  * IMPORTANT: Update the package name below to match your project
  */
 
-import { execSync } from "child_process";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
+import { changedPaths, pullRequestRange } from "./git-comparison.mjs";
 import { printUntrusted } from "./github-actions-log.mjs";
 
 // Package name for the Go module (used in changeset frontmatter)
@@ -22,134 +22,26 @@ const PACKAGE_NAME = "go-ai-driven-development-pipeline-template";
 const CHANGESET_DIR = ".changeset";
 
 /**
- * Ensure a git commit is available locally, fetching if necessary
- * @param {string} sha The commit SHA to check
- */
-function ensureCommitAvailable(sha) {
-  try {
-    execSync(`git cat-file -e ${sha}`, { stdio: "ignore" });
-  } catch {
-    console.log("Base commit not available locally, attempting fetch...");
-    try {
-      execSync(`git fetch origin ${sha}`, { stdio: "inherit" });
-    } catch {
-      execSync("git fetch origin", { stdio: "inherit" });
-    }
-  }
-}
-
-/**
- * Parse git diff output and extract added changeset files
- * @param {string} diffOutput Output from git diff --name-status
- * @returns {string[]} Array of added changeset file names
- */
-function parseAddedChangesets(diffOutput) {
-  const addedChangesets = [];
-  for (const line of diffOutput.trim().split("\n")) {
-    if (!line) {
-      continue;
-    }
-    const [status, filePath] = line.split("\t");
-    if (
-      status === "A" &&
-      filePath.startsWith(`${CHANGESET_DIR}/`) &&
-      filePath.endsWith(".md") &&
-      !filePath.endsWith("README.md")
-    ) {
-      addedChangesets.push(filePath.replace(`${CHANGESET_DIR}/`, ""));
-    }
-  }
-  return addedChangesets;
-}
-
-/**
- * Try to get changesets using explicit SHA comparison
- * @param {string} baseSha Base commit SHA
- * @param {string} headSha Head commit SHA
- * @returns {string[] | null} Array of changeset files or null if failed
- */
-function tryExplicitShaComparison(baseSha, headSha) {
-  console.log(`Comparing ${baseSha}...${headSha}`);
-  try {
-    ensureCommitAvailable(baseSha);
-    const diffOutput = execSync(
-      `git diff --name-status ${baseSha} ${headSha}`,
-      { encoding: "utf-8" }
-    );
-    return parseAddedChangesets(diffOutput);
-  } catch (error) {
-    console.log(`Git diff with explicit SHAs failed: ${error.message}`);
-    return null;
-  }
-}
-
-/**
- * Try to get changesets using base branch comparison
- * @param {string} prBase Base branch name
- * @returns {string[] | null} Array of changeset files or null if failed
- */
-function tryBaseBranchComparison(prBase) {
-  console.log(`Comparing against base branch: ${prBase}`);
-  try {
-    try {
-      execSync(`git fetch origin ${prBase}`, { stdio: "inherit" });
-    } catch {
-      // Ignore fetch errors, we might already have it
-    }
-    const diffOutput = execSync(
-      `git diff --name-status origin/${prBase}...HEAD`,
-      { encoding: "utf-8" }
-    );
-    return parseAddedChangesets(diffOutput);
-  } catch (error) {
-    console.log(`Git diff with base ref failed: ${error.message}`);
-    return null;
-  }
-}
-
-/**
- * Fallback: get all changesets in directory
- * @returns {string[]} Array of all changeset file names
- */
-function getAllChangesets() {
-  console.log(
-    "Warning: Could not determine PR diff, checking all changesets in directory"
-  );
-  if (!existsSync(CHANGESET_DIR)) {
-    return [];
-  }
-  return readdirSync(CHANGESET_DIR).filter(
-    (file) => file.endsWith(".md") && file !== "README.md"
-  );
-}
-
-/**
- * Get changeset files added in the current PR using git diff
+ * Get changesets added by the PR, or list local changesets without a PR context.
  * @returns {string[]} Array of added changeset file names
  */
 function getAddedChangesetFiles() {
   const baseSha = process.env.GITHUB_BASE_SHA || process.env.BASE_SHA;
   const headSha = process.env.GITHUB_HEAD_SHA || process.env.HEAD_SHA;
 
-  // Try explicit SHAs first
-  if (baseSha && headSha) {
-    const result = tryExplicitShaComparison(baseSha, headSha);
-    if (result !== null) {
-      return result;
-    }
+  if (process.env.GITHUB_EVENT_NAME === "pull_request" || baseSha || headSha || process.env.GITHUB_BASE_REF) {
+    const range = pullRequestRange(baseSha, headSha);
+    console.log(`Comparing ${range}`);
+    return changedPaths("diff", "--diff-filter=A", "--name-only", "-z", range, "--", CHANGESET_DIR)
+      .filter((file) => file.endsWith(".md") && !file.endsWith("/README.md"))
+      .map((file) => file.slice(CHANGESET_DIR.length + 1));
   }
 
-  // Try base branch comparison
-  const prBase = process.env.GITHUB_BASE_REF;
-  if (prBase) {
-    const result = tryBaseBranchComparison(prBase);
-    if (result !== null) {
-      return result;
-    }
-  }
-
-  // Fallback to checking all changesets
-  return getAllChangesets();
+  console.log("Checking changesets in the local directory");
+  if (!existsSync(CHANGESET_DIR)) return [];
+  return readdirSync(CHANGESET_DIR).filter(
+    (file) => file.endsWith(".md") && file !== "README.md"
+  );
 }
 
 /**

@@ -7,8 +7,9 @@
  * and outputs the results for use in GitHub Actions workflow conditions.
  *
  * Key behavior:
- * - For PRs: compares PR head against base branch
- * - For pushes: compares HEAD against HEAD^
+ * - For PRs: compares the PR head against its merge base
+ * - For pushes: compares HEAD against the pre-push commit
+ * - For local runs: compares HEAD against its first parent
  * - Excludes certain folders and file types from "code changes" detection
  *
  * Excluded from code changes (don't require changesets):
@@ -25,6 +26,7 @@
  *   - GITHUB_EVENT_NAME: 'pull_request' or 'push'
  *   - GITHUB_BASE_SHA: Base commit SHA for PR
  *   - GITHUB_HEAD_SHA: Head commit SHA for PR
+ *   - GITHUB_BEFORE_SHA: Pre-push commit SHA
  *
  * Outputs (written to GITHUB_OUTPUT):
  *   - go-changed: 'true' if any .go files changed
@@ -35,24 +37,10 @@
  *   - any-code-changed: 'true' if any code files changed (excludes docs, changesets, experiments, examples)
  */
 
-import { execSync } from "child_process";
 import { appendFileSync } from "fs";
 import { printUntrusted } from "./github-actions-log.mjs";
 
-/**
- * Execute a shell command and return trimmed output
- * @param {string} command - The command to execute
- * @returns {string} - The trimmed command output
- */
-function exec(command) {
-  try {
-    return execSync(command, { encoding: "utf-8" }).trim();
-  } catch (error) {
-    console.error(`Error executing command: ${command}`);
-    printUntrusted(error.message, { stream: process.stderr });
-    return "";
-  }
-}
+import { changedPaths, pullRequestRange, pushPaths } from "./git-comparison.mjs";
 
 /**
  * Write output to GitHub Actions output file
@@ -72,42 +60,17 @@ function setOutput(name, value) {
  * @returns {string[]} Array of changed file paths
  */
 function getChangedFiles() {
-  const eventName = process.env.GITHUB_EVENT_NAME || "local";
-
-  if (eventName === "pull_request") {
-    const baseSha = process.env.GITHUB_BASE_SHA;
-    const headSha = process.env.GITHUB_HEAD_SHA;
-
-    if (baseSha && headSha) {
-      console.log(`Comparing PR: ${baseSha}...${headSha}`);
-      try {
-        // Ensure we have the base commit
-        try {
-          execSync(`git cat-file -e ${baseSha}`, { stdio: "ignore" });
-        } catch {
-          console.log("Base commit not available locally, attempting fetch...");
-          execSync(`git fetch origin ${baseSha}`, { stdio: "inherit" });
-        }
-        const output = exec(`git diff --name-only ${baseSha} ${headSha}`);
-        return output ? output.split("\n").filter(Boolean) : [];
-      } catch (error) {
-        console.error("Git diff failed:");
-        printUntrusted(error.message, { stream: process.stderr });
-      }
-    }
+  const event = process.env.GITHUB_EVENT_NAME;
+  if (event === "pull_request") {
+    const range = pullRequestRange(
+      process.env.GITHUB_BASE_SHA,
+      process.env.GITHUB_HEAD_SHA
+    );
+    console.log(`Comparing PR: ${range}`);
+    return changedPaths("diff", "--name-only", "--no-renames", "-z", range, "--");
   }
 
-  // For push events or fallback
-  console.log("Comparing HEAD^ to HEAD");
-  try {
-    const output = exec("git diff --name-only HEAD^ HEAD");
-    return output ? output.split("\n").filter(Boolean) : [];
-  } catch {
-    // If HEAD^ doesn't exist (first commit), list all files in HEAD
-    console.log("HEAD^ not available, listing all files in HEAD");
-    const output = exec("git ls-tree --name-only -r HEAD");
-    return output ? output.split("\n").filter(Boolean) : [];
-  }
+  return pushPaths(process.env.GITHUB_BEFORE_SHA, event);
 }
 
 /**
@@ -194,5 +157,10 @@ function detectChanges() {
   console.log("\nChange detection completed.");
 }
 
-// Run the detection
-detectChanges();
+try {
+  detectChanges();
+} catch (error) {
+  console.error("::error::Could not establish changed files");
+  printUntrusted(error.message, { stream: process.stderr });
+  process.exitCode = 1;
+}
