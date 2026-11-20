@@ -145,6 +145,12 @@ export async function checkDependencies(
   const versions = new Map();
   const pins = new Set();
   for (const dependency of dependencies) {
+    const recordFailure = (error) => {
+      errors.push({
+        stale: false,
+        message: `${dependency.location}: ${dependency.name}: ${error.message}`,
+      });
+    };
     try {
       if (!versions.has(dependency.name))
         versions.set(dependency.name, await latest(dependency));
@@ -154,18 +160,25 @@ export async function checkDependencies(
           stale: true,
           message: `${dependency.location}: ${dependency.name} pins ${dependency.version}; latest stable is ${current}`,
         });
-        continue;
       }
-      const key = `${dependency.name}@${dependency.ref}`;
+    } catch (error) {
+      recordFailure(error);
+    }
+
+    try {
+      // The same ref can be declared with different versions across workflows.
+      const key = JSON.stringify([
+        dependency.kind,
+        dependency.name,
+        dependency.version,
+        dependency.ref,
+      ]);
       if (dependency.ref && !pins.has(key)) {
         await verify(dependency);
         pins.add(key);
       }
     } catch (error) {
-      errors.push({
-        stale: false,
-        message: `${dependency.location}: ${dependency.name}: ${error.message}`,
-      });
+      recordFailure(error);
     }
   }
   return errors;
