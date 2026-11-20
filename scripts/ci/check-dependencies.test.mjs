@@ -116,6 +116,46 @@ describe("CI dependency freshness", () => {
     assert.deepEqual(checked, ["actions/checkout", "rhysd/actionlint"]);
   });
 
+  test("checks stale action and container pins before applying event policy", async () => {
+    const dependencies = findDependencies([{ path: "test.yml", source: workflow }]).slice(0, 2);
+    for (const dependency of dependencies) {
+      for (const stale of [false, true]) {
+        for (const valid of [false, true]) {
+          const checked = [];
+          const errors = await checkDependencies([dependency], {
+            latest: async () => stale ? "999.0.0" : dependency.version,
+            verifyPin: async (pin) => {
+              checked.push(pin);
+              if (!valid) throw new Error("Pin integrity mismatch");
+            },
+          });
+          assert.deepEqual(checked, [dependency]);
+          for (const event of ["push", "schedule", "workflow_dispatch", "pull_request"]) {
+            const result = run(errors, event);
+            assert.equal(result.code, Number(!valid || (stale && event === "pull_request")));
+            if (!valid) assert.match(result.stderr, /Pin integrity mismatch/);
+            if (stale && event !== "pull_request") assert.match(result.stdout, /::warning/);
+          }
+        }
+      }
+    }
+  });
+
+  test("verifies the declared version even when another workflow uses the same ref", async () => {
+    const [current] = findDependencies([{ path: "test.yml", source: workflow }]);
+    const stale = { ...current, version: "7.0.0", location: "other.yml:8" };
+    const checked = [];
+    const errors = await checkDependencies([current, current, stale], {
+      latest: async () => current.version,
+      verifyPin: async ({ version }) => {
+        checked.push(version);
+        if (version === stale.version) throw new Error("Pin integrity mismatch");
+      },
+    });
+    assert.deepEqual(checked, [current.version, stale.version]);
+    assert.match(run(errors, "push").stderr, /other\.yml:8.*Pin integrity mismatch/);
+  });
+
   test("registry and integrity failures cannot silently pass", async () => {
     const dependencies = findDependencies([
       { path: "test.yml", source: workflow },

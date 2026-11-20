@@ -36,6 +36,7 @@ jobs:
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     concurrency:
       group: check-${{ github.workflow }}-${{ github.ref }}-detect-changes
       cancel-in-progress: true
@@ -56,7 +57,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Detect changes
         id: changes
@@ -64,6 +65,7 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_BEFORE_SHA: ${{ github.event.before }}
         run: bun scripts/detect-code-changes.mjs
 
   # === CHANGESET CHECK - only runs on PRs with code changes ===
@@ -72,6 +74,7 @@ jobs:
   changeset-check:
     name: Check for Changeset
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     concurrency:
       group: check-${{ github.workflow }}-${{ github.ref }}-changeset-check
       cancel-in-progress: true
@@ -86,11 +89,10 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Check for changeset
         env:
-          GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bun scripts/validate-changeset.mjs
@@ -101,32 +103,36 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     concurrency:
       group: check-${{ github.workflow }}-${{ github.ref }}-lint
       cancel-in-progress: true
     needs: [detect-changes]
+    # Dispatch intentionally skips detection. A failed comparison always blocks lint.
     if: |
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      needs.detect-changes.outputs.go-changed == 'true' ||
-      needs.detect-changes.outputs.mod-changed == 'true' ||
-      needs.detect-changes.outputs.mjs-changed == 'true' ||
-      needs.detect-changes.outputs.docs-changed == 'true' ||
-      needs.detect-changes.outputs.workflow-changed == 'true'
+      !cancelled() &&
+      (needs.detect-changes.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && needs.detect-changes.result == 'skipped')) &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+        needs.detect-changes.outputs.go-changed == 'true' ||
+        needs.detect-changes.outputs.mod-changed == 'true' ||
+        needs.detect-changes.outputs.mjs-changed == 'true' ||
+        needs.detect-changes.outputs.docs-changed == 'true' ||
+        needs.detect-changes.outputs.workflow-changed == 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Check formatting
         run: |
@@ -155,12 +161,16 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     concurrency:
       group: check-${{ github.workflow }}-${{ github.ref }}-test-${{ matrix.os }}
       cancel-in-progress: true
     needs: [detect-changes, changeset-check]
-    # Run if: push event, workflow_dispatch, OR changeset-check succeeded, OR changeset-check was skipped (docs-only PR)
-    if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || needs.changeset-check.result == 'success' || needs.changeset-check.result == 'skipped') }}
+    if: |
+      !cancelled() &&
+      (needs.detect-changes.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && needs.detect-changes.result == 'skipped')) &&
+      (needs.changeset-check.result == 'success' || needs.changeset-check.result == 'skipped')
     env:
       # Step conditions cannot read the secrets context directly.
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -173,9 +183,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: false
 
       - name: Run tests (Unix)
@@ -203,18 +213,23 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     concurrency:
       group: check-${{ github.workflow }}-${{ github.ref }}-build
       cancel-in-progress: true
     needs: [lint, test]
+    # Check direct prerequisites explicitly since optional ancestor jobs may be skipped.
+    if: |
+      !cancelled() &&
+      needs.lint.result == 'success' && needs.test.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: false
 
       - name: Build package
@@ -227,6 +242,7 @@ jobs:
   auto-release:
     name: Auto Release
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     concurrency:
@@ -234,7 +250,9 @@ jobs:
       cancel-in-progress: false
       queue: max
     needs: [lint, test, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.lint.result == 'success' && needs.test.result == 'success' && needs.build.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -245,7 +263,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Check for changesets
         id: check_changesets
@@ -299,6 +317,7 @@ jobs:
   instant-release:
     name: Instant Release
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     concurrency:
@@ -306,7 +325,9 @@ jobs:
       cancel-in-progress: false
       queue: max
     needs: [lint, test, build]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant'
+    if: |
+      !cancelled() && github.event_name == 'workflow_dispatch' && inputs.release_mode == 'instant' &&
+      needs.lint.result == 'success' && needs.test.result == 'success' && needs.build.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -317,7 +338,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Configure git
         run: |
@@ -332,14 +353,18 @@ jobs:
           DESCRIPTION: ${{ github.event.inputs.description }}
         run: bun scripts/version-and-commit.mjs --mode instant --bump-type "$BUMP_TYPE" --description "$DESCRIPTION"
 
+      - name: Require a release commit
+        if: steps.version.outputs.version_committed != 'true'
+        run: |
+          echo "::error::The selected release did not produce a version commit."
+          exit 1
+
       - name: Verify module availability
-        if: steps.version.outputs.version_committed == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: bun scripts/verify-module-availability.mjs --tag "$TAG"
 
       - name: Create GitHub Release
-        if: steps.version.outputs.version_committed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.new_version }}
@@ -349,6 +374,7 @@ jobs:
   changeset-release:
     name: Changeset Release
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     concurrency:
@@ -356,7 +382,9 @@ jobs:
       cancel-in-progress: false
       queue: max
     needs: [lint, test, build]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'changeset'
+    if: |
+      !cancelled() && github.event_name == 'workflow_dispatch' && inputs.release_mode == 'changeset' &&
+      needs.lint.result == 'success' && needs.test.result == 'success' && needs.build.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -367,7 +395,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Check for changesets
         id: check_changesets
@@ -395,21 +423,25 @@ jobs:
         env:
           CI: true
 
+      - name: Require a release commit
+        if: steps.version.outputs.version_committed != 'true'
+        run: |
+          echo "::error::The selected release did not produce a version commit."
+          exit 1
+
       - name: Verify module availability
-        if: steps.version.outputs.version_committed == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: bun scripts/verify-module-availability.mjs --tag "$TAG"
 
       - name: Create GitHub Release
-        if: steps.version.outputs.version_committed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.new_version }}
         run: bun scripts/create-github-release.mjs --version "$VERSION"
 
   # === PIPELINE STATUS - terminal gate that explains every failure ===
-  # Fails when any job above failed or was cancelled, and reports jobs that
+  # Fails on unsuccessful required jobs, and reports jobs that
   # never got a hosted runner as "Hosted runner not acquired" (infrastructure,
   # rerun automatically by rerun-unacquired.yml) instead of a code failure.
   pipeline-status:
@@ -441,11 +473,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.4'
+          bun-version: '1.4.5'
 
       - name: Check pipeline status
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
           GH_TOKEN: ${{ github.token }}
           CI_VERBOSE: ${{ vars.CI_VERBOSE || 'false' }}
           REPOSITORY: ${{ github.repository }}

@@ -44,7 +44,16 @@ function runFixture(root, script) {
   return spawnSync(process.execPath, [join(root, "scripts", script)], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, GITHUB_ACTIONS: "true" },
+    env: {
+      ...process.env,
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: "",
+      GITHUB_BASE_SHA: "",
+      GITHUB_HEAD_SHA: "",
+      GITHUB_BASE_REF: "",
+      BASE_SHA: "",
+      HEAD_SHA: "",
+    },
   });
 }
 
@@ -108,6 +117,10 @@ describe("printing contributor-authored CI log text", () => {
     copyFileSync(
       "scripts/validate-changeset.mjs",
       join(root, "scripts/validate-changeset.mjs")
+    );
+    copyFileSync(
+      "scripts/git-comparison.mjs",
+      join(root, "scripts/git-comparison.mjs")
     );
     writeChangeset(root, fileName, payload);
 

@@ -144,13 +144,14 @@ describe("rerun of runner-acquisition failures", () => {
 });
 
 describe("pipeline status gate", () => {
-  function run(needs, jobs, readJobs) {
+  function run(needs, jobs, readJobs, release = {}) {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-status-"));
     const summaryFile = join(directory, "summary.md");
     const chunks = [];
     try {
       const code = evaluate({
         needs,
+        ...release,
         jobs: readJobs || (() => jobs),
         classify,
         summaryFile,
@@ -175,6 +176,51 @@ describe("pipeline status gate", () => {
     assert.equal(result.code, 0);
     assert.equal(result.summary, "");
     assert.deepEqual(blockingNeeds({ a: { result: "skipped" } }), []);
+  });
+
+  for (const mode of ["instant", "changeset"]) {
+    test(`requires successful checks and publication on ${mode} dispatch`, () => {
+      const releaseJob = `${mode}-release`;
+      const otherReleaseJob = mode === "instant" ? "changeset-release" : "instant-release";
+      const needs = Object.fromEntries(
+        ["lint", "test", "build", releaseJob].map((job) => [job, { result: "success" }])
+      );
+      for (const job of ["detect-changes", "changeset-check", "auto-release", otherReleaseJob])
+        needs[job] = { result: "skipped" };
+
+      const dispatch = { event: "workflow_dispatch", releaseMode: mode };
+      assert.equal(run(needs, [], undefined, dispatch).code, 0);
+      for (const job of ["lint", "test", "build", releaseJob]) {
+        for (const status of ["skipped", "failure", "cancelled", "missing"]) {
+          const updated = { ...needs, [job]: { result: status } };
+          if (status === "missing") delete updated[job];
+          const result = run(updated, [], undefined, dispatch);
+          assert.equal(result.code, 1, `${job} (${status})`);
+          assert.ok(result.output.includes(`${job} (${status})`));
+          assert.ok(result.summary.includes(`${job} (${status})`));
+        }
+      }
+    });
+  }
+
+  test("fails a dispatch without a recognized release mode", () => {
+    const result = run({}, [], undefined, { event: "workflow_dispatch" });
+    assert.equal(result.code, 1);
+    assert.match(result.output, /Invalid or missing manual release mode/);
+  });
+
+  test("requires the auto-release job on pushes, while the changeset check can skip", () => {
+    const needs = Object.fromEntries(
+      ["detect-changes", "lint", "test", "build", "auto-release"]
+        .map((job) => [job, { result: "success" }])
+    );
+    needs["changeset-check"] = { result: "skipped" };
+    const push = { event: "push" };
+    assert.equal(run(needs, [], undefined, push).code, 0);
+    needs["auto-release"].result = "skipped";
+    const result = run(needs, [], undefined, push);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /auto-release \(skipped\)/);
   });
 
   test("reports an unacquired runner as infrastructure, not code", () => {

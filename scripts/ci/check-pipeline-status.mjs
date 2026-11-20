@@ -2,7 +2,8 @@
 
 // Terminal status gate for the CI/CD pipeline (issue #14).
 //
-// The gate fails when any job it needs failed or was cancelled, and explains
+// The gate fails when any job it needs failed or was cancelled, or when
+// a release event skips its required checks or selected release job. It explains
 // each unsuccessful job of the current run so the cause is visible on the run
 // page: a job that GitHub never handed a hosted runner is reported as
 // "Hosted runner not acquired" (infrastructure, rerun automatically by
@@ -10,6 +11,7 @@
 //
 // Environment:
 //   NEEDS_JSON      toJSON(needs) of the gate job (required)
+//   GITHUB_EVENT_NAME and RELEASE_MODE select required jobs on release events
 //   REPOSITORY      owner/repo, RUN_ID and RUN_ATTEMPT of the current run
 //   GH_TOKEN        token with actions: read and checks: read
 //   CI_VERBOSE=true traces the job classification
@@ -20,10 +22,27 @@ import { REASONS, classifyJobs, listJobs } from "./runner-acquisition.mjs";
 const BLOCKING = new Set(["failure", "cancelled"]);
 
 /** Names of the needed jobs whose result blocks the pipeline. */
-export function blockingNeeds(needs) {
-  return Object.entries(needs)
+export function blockingNeeds(needs, event, releaseMode) {
+  const blocking = Object.entries(needs)
     .filter(([, value]) => BLOCKING.has(value?.result))
     .map(([name, value]) => `${name} (${value.result})`);
+
+  let required = [];
+  if (event === "push") {
+    required = ["detect-changes", "lint", "test", "build", "auto-release"];
+  } else if (event === "workflow_dispatch") {
+    if (releaseMode === "instant" || releaseMode === "changeset")
+      required = ["lint", "test", "build", `${releaseMode}-release`];
+    else
+      blocking.push("Invalid or missing manual release mode");
+  }
+
+  for (const name of required) {
+    const result = needs[name]?.result;
+    if (result !== "success" && !BLOCKING.has(result))
+      blocking.push(`${name} (${result ?? "missing"})`);
+  }
+  return blocking;
 }
 
 /**
@@ -46,19 +65,22 @@ export function describeJobs(classified) {
 /**
  * Evaluate the pipeline and return the exit code.
  *
- * @param {{needs: object, jobs?: () => object[], classify?: (jobs: object[]) => object[],
+ * @param {{needs: object, event?: string, releaseMode?: string,
+ *   jobs?: () => object[], classify?: (jobs: object[]) => object[],
  *   summaryFile?: string, githubActions?: boolean,
  *   stdout?: {write: (text: string) => unknown}}} options
  */
 export function evaluate({
   needs,
+  event,
+  releaseMode,
   jobs,
   classify,
   summaryFile,
   githubActions,
   stdout = process.stdout,
 }) {
-  const blocking = blockingNeeds(needs);
+  const blocking = blockingNeeds(needs, event, releaseMode);
   const print = (text) => printUntrusted(text, { stream: stdout, githubActions });
   if (!blocking.length) {
     stdout.write("Every required job succeeded or was skipped.\n");
@@ -110,6 +132,8 @@ function main() {
   const verbose = process.env.CI_VERBOSE === "true";
   return evaluate({
     needs: JSON.parse(process.env.NEEDS_JSON),
+    event: process.env.GITHUB_EVENT_NAME,
+    releaseMode: process.env.RELEASE_MODE,
     // Latest attempt of each job: a rerun replaces the attempt it retried.
     jobs: () => listJobs({ repository, runId }),
     classify: (jobs) => {
