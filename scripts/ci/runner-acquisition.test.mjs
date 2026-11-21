@@ -168,15 +168,53 @@ describe("pipeline status gate", () => {
     }
   }
 
-  test("passes when every need succeeded or was skipped", () => {
+  const pullRequest = { event: "pull_request" };
+
+  test("passes a pull request when every need succeeded or was skipped", () => {
     const result = run(
-      { lint: { result: "success" }, "auto-release": { result: "skipped" } },
-      []
+      { lint: { result: "success", outputs: {} }, "auto-release": { result: "skipped" } },
+      [],
+      undefined,
+      pullRequest
     );
     assert.equal(result.code, 0);
     assert.equal(result.summary, "");
     assert.deepEqual(blockingNeeds({ a: { result: "skipped" } }), []);
   });
+
+  for (const [label, needs, job] of [
+    ["missing needs", undefined],
+    ["null needs", null],
+    ["empty object", {}],
+    ["empty array", []],
+    ["array of job records", [{ result: "success" }]],
+    ["numeric needs", 42],
+    ["string needs", "success"],
+    ["empty job record", { lint: {} }, "lint"],
+    ["null job record", { lint: null }, "lint"],
+    ["array job record", { lint: [] }, "lint"],
+    ["string job record", { lint: "success" }, "lint"],
+    ["unknown result", { lint: { result: "neutral" } }, "lint"],
+    ["null result", { lint: { result: null } }, "lint"],
+    ["partially populated needs", { lint: { result: "success" }, test: { outputs: {} } }, "test"],
+  ]) {
+    test(`rejects ${label} in a pull request`, () => {
+      const result = run(needs, [], undefined, pullRequest);
+      assert.equal(result.code, 1);
+      assert.doesNotMatch(result.output, /Every required job succeeded/);
+      const diagnostic = job ? `Job ${job} has an invalid observation` : "needs must be a nonempty object";
+      assert.ok(result.output.includes(diagnostic));
+      assert.ok(result.summary.includes(diagnostic));
+    });
+  }
+
+  for (const result of ["failure", "cancelled"]) {
+    test(`blocks a pull request when a need is ${result}`, () => {
+      const check = run({ lint: { result } }, [], undefined, pullRequest);
+      assert.equal(check.code, 1);
+      assert.ok(check.output.includes(`lint (${result})`));
+    });
+  }
 
   for (const mode of ["instant", "changeset"]) {
     test(`requires successful checks and publication on ${mode} dispatch`, () => {
@@ -204,7 +242,9 @@ describe("pipeline status gate", () => {
   }
 
   test("fails a dispatch without a recognized release mode", () => {
-    const result = run({}, [], undefined, { event: "workflow_dispatch" });
+    const result = run({ lint: { result: "success" } }, [], undefined, {
+      event: "workflow_dispatch",
+    });
     assert.equal(result.code, 1);
     assert.match(result.output, /Invalid or missing manual release mode/);
   });

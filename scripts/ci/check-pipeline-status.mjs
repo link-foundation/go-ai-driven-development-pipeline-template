@@ -2,8 +2,8 @@
 
 // Terminal status gate for the CI/CD pipeline (issue #14).
 //
-// The gate fails when any job it needs failed or was cancelled, or when
-// a release event skips its required checks or selected release job. It explains
+// The gate fails on invalid observations, failed or cancelled jobs, and release
+// events that skip required checks or the selected release job. It explains
 // each unsuccessful job of the current run so the cause is visible on the run
 // page: a job that GitHub never handed a hosted runner is reported as
 // "Hosted runner not acquired" (infrastructure, rerun automatically by
@@ -20,11 +20,26 @@ import { printUntrusted } from "../github-actions-log.mjs";
 import { REASONS, classifyJobs, listJobs } from "./runner-acquisition.mjs";
 
 const BLOCKING = new Set(["failure", "cancelled"]);
+const COMPLETED = new Set(["success", ...BLOCKING, "skipped"]);
 
-/** Names of the needed jobs whose result blocks the pipeline. */
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Reasons the observed needs block the pipeline. */
 export function blockingNeeds(needs, event, releaseMode) {
-  const blocking = Object.entries(needs)
-    .filter(([, value]) => BLOCKING.has(value?.result))
+  const entries = isRecord(needs) ? Object.entries(needs) : [];
+  if (!entries.length) return ["Pipeline needs must be a nonempty object"];
+
+  const invalid = entries
+    .filter(([, value]) =>
+      !isRecord(value) || !Object.hasOwn(value, "result") || !COMPLETED.has(value.result)
+    )
+    .map(([name]) => `Job ${name} has an invalid observation. Expected a completed job result.`);
+  if (invalid.length) return invalid;
+
+  const blocking = entries
+    .filter(([, value]) => BLOCKING.has(value.result))
     .map(([name, value]) => `${name} (${value.result})`);
 
   let required = [];
@@ -38,7 +53,7 @@ export function blockingNeeds(needs, event, releaseMode) {
   }
 
   for (const name of required) {
-    const result = needs[name]?.result;
+    const result = Object.hasOwn(needs, name) ? needs[name]?.result : undefined;
     if (result !== "success" && !BLOCKING.has(result))
       blocking.push(`${name} (${result ?? "missing"})`);
   }
@@ -65,7 +80,7 @@ export function describeJobs(classified) {
 /**
  * Evaluate the pipeline and return the exit code.
  *
- * @param {{needs: object, event?: string, releaseMode?: string,
+ * @param {{needs: unknown, event?: string, releaseMode?: string,
  *   jobs?: () => object[], classify?: (jobs: object[]) => object[],
  *   summaryFile?: string, githubActions?: boolean,
  *   stdout?: {write: (text: string) => unknown}}} options
