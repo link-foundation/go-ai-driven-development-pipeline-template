@@ -9,7 +9,7 @@ import (
 
 // Version represents the current version of this package.
 // This is used for release automation and changelog management.
-const Version = "0.2.0"
+const Version = "0.2.1"
 
 // Add returns the sum of two integers.
 func Add(a, b int) int {

@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.2.1] - 2026-11-22
+
+Reject empty or malformed job observations in the pipeline status gate.
+
+
 ## [0.2.0] - 2026-11-20
 
 Bound CI jobs with explicit timeouts. Run required checks before publishing a release and fail manual runs if the selected release does not complete. Reject unavailable Git comparisons and verify immutable pins even when their declared versions are stale.
